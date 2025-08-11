@@ -65,6 +65,16 @@ class GRPOTrainer:
         self.output_dir = output_dir
         self.accelerator = Accelerator(gradient_accumulation_steps=config.gradient_accumulation_steps)
         
+        # Training metrics tracking
+        self.training_history = {
+            'losses': [],
+            'mean_rewards': [],
+            'reward_stds': [],
+            'accuracies': [],
+            'format_rewards': [],
+            'correctness_rewards': []
+        }
+        
         # System prompt as defined in the article
         self.system_prompt = """A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
 The assistant first thinks about the reasoning process in the mind and then provides the user
@@ -192,6 +202,11 @@ Failing to follow the response format will result in a penalty."""
         # Create dataset
         dataset = create_dataset(self.config.environment_name, seed=self.config.dataset_seed, size=dataset_size)
         
+        # Metrics for this experience collection round
+        all_rewards = []
+        all_correctness_rewards = []
+        all_format_rewards = []
+        
         with torch.no_grad():
             for batch_idx in tqdm(range(0, len(dataset), self.config.exploration_batchsize)):
                 batch = dataset[batch_idx:batch_idx + self.config.exploration_batchsize]
@@ -258,6 +273,11 @@ Failing to follow the response format will result in a penalty."""
                         
                         responses.append(response_text)
                         rewards.append(total_reward)
+                        
+                        # Track individual reward components for analysis
+                        all_rewards.append(total_reward)
+                        all_correctness_rewards.append(correctness_reward)
+                        all_format_rewards.append(format_reward)
                     
                     # Calculate advantages (group-relative)
                     rewards = np.array(rewards)
@@ -282,7 +302,16 @@ Failing to follow the response format will result in a penalty."""
                     break
         
         self._collecting_experience = False
+        
+        # Store metrics for this experience collection round
+        if all_rewards:
+            self.training_history['mean_rewards'].append(np.mean(all_rewards))
+            self.training_history['reward_stds'].append(np.std(all_rewards))
+            self.training_history['correctness_rewards'].append(np.mean(all_correctness_rewards))
+            self.training_history['format_rewards'].append(np.mean(all_format_rewards))
+        
         logger.info(f"Collected {len(self.memory_buffer)} experiences")
+        logger.info(f"Mean reward: {np.mean(all_rewards):.3f} ± {np.std(all_rewards):.3f}")
     
     def training_phase(self) -> float:
         """Training phase using collected experiences"""
@@ -333,13 +362,17 @@ Failing to follow the response format will result in a penalty."""
         avg_loss = total_loss / num_batches
         logger.info(f"Average training loss: {avg_loss:.4f}")
         
+        # Store training loss
+        self.training_history['losses'].append(avg_loss)
+        
         # Clear buffer after training
         self.memory_buffer.clear()
         
         return avg_loss
     
-    def train(self, num_iterations: int = 10, dataset_size_per_iteration: int = 100):
-        """Main GRPO training loop"""
+    def train(self, num_iterations: int = 10, dataset_size_per_iteration: int = 100, 
+              show_plots: bool = False, save_plots: bool = False):
+        """Main GRPO training loop with optional visualization"""
         logger.info("Starting GRPO training...")
         
         for iteration in range(num_iterations):
@@ -351,12 +384,25 @@ Failing to follow the response format will result in a penalty."""
             # Training phase
             avg_loss = self.training_phase()
             
+            # Evaluate accuracy periodically
+            if (iteration + 1) % max(1, num_iterations // 5) == 0:  # Evaluate 5 times during training
+                eval_results = self.evaluate(test_size=50)  # Quick evaluation
+                self.training_history['accuracies'].append(eval_results['accuracy'] * 100)
+                logger.info(f"Current accuracy: {eval_results['accuracy']:.3f}")
+            
+            # Show real-time plots if requested
+            if show_plots and len(self.training_history['losses']) > 1:
+                self._show_live_plots()
+            
             # Save model periodically
             if (iteration + 1) % (self.config.save_every // 10) == 0:
                 save_path = os.path.join(self.output_dir, f"checkpoint_iter_{iteration + 1}")
                 os.makedirs(save_path, exist_ok=True)
                 self.model.save_pretrained(save_path)
                 logger.info(f"Saved checkpoint at iteration {iteration + 1}")
+                
+                # Save training history
+                self._save_training_history(save_path)
         
         # Save final model
         final_path = os.path.join(self.output_dir, "final_model")
@@ -433,3 +479,48 @@ Failing to follow the response format will result in a penalty."""
         
         logger.info(f"Evaluation results: {results}")
         return results
+    
+    def _show_live_plots(self) -> None:
+        """Show live training plots during training"""
+        try:
+            from .visualizer import TrainingVisualizer
+            
+            visualizer = TrainingVisualizer()
+            visualizer.plot_grpo_training_curves(self.training_history, save_name=None)
+            
+        except ImportError:
+            logger.warning("Visualization module not available for live plots")
+        except Exception as e:
+            logger.warning(f"Error showing live plots: {e}")
+    
+    def _save_training_history(self, save_path: str) -> None:
+        """Save training history to JSON file"""
+        history_file = os.path.join(save_path, "training_history.json")
+        with open(history_file, 'w') as f:
+            # Convert numpy arrays to lists for JSON serialization
+            serializable_history = {}
+            for key, value in self.training_history.items():
+                if isinstance(value, list):
+                    serializable_history[key] = [float(x) if hasattr(x, 'item') else x for x in value]
+                else:
+                    serializable_history[key] = value
+            
+            json.dump(serializable_history, f, indent=4)
+        logger.info(f"Training history saved to: {history_file}")
+    
+    def get_training_summary(self) -> Dict[str, Any]:
+        """Get a comprehensive training summary with metrics"""
+        if not self.training_history['losses']:
+            return {"message": "No training completed yet"}
+            
+        summary = {
+            "total_iterations": len(self.training_history['losses']),
+            "final_loss": self.training_history['losses'][-1] if self.training_history['losses'] else None,
+            "best_loss": min(self.training_history['losses']) if self.training_history['losses'] else None,
+            "final_accuracy": self.training_history['accuracies'][-1] if self.training_history['accuracies'] else None,
+            "best_accuracy": max(self.training_history['accuracies']) if self.training_history['accuracies'] else None,
+            "mean_final_reward": self.training_history['mean_rewards'][-1] if self.training_history['mean_rewards'] else None,
+            "training_history": self.training_history
+        }
+        
+        return summary

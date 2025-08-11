@@ -52,6 +52,12 @@ def main():
     parser.add_argument("--eval_seed", type=int, default=123,
                        help="Seed for evaluation data generation")
     
+    # Visualization options
+    parser.add_argument("--show_plots", action="store_true",
+                       help="Show real-time training plots during training")
+    parser.add_argument("--save_plots", action="store_true", 
+                       help="Save training plots automatically")
+    
     args = parser.parse_args()
     
     # Create config with hyperparameters from the article
@@ -100,9 +106,16 @@ def main():
     
     # Run GRPO training
     print("Starting GRPO training...")
+    if args.show_plots:
+        print("📊 Real-time plots enabled")
+    if args.save_plots:
+        print("💾 Plot saving enabled")
+        
     trainer.train(
         num_iterations=args.num_iterations,
-        dataset_size_per_iteration=args.dataset_size_per_iteration
+        dataset_size_per_iteration=args.dataset_size_per_iteration,
+        show_plots=args.show_plots,
+        save_plots=args.save_plots
     )
     
     # Final evaluation
@@ -146,6 +159,38 @@ def main():
     print(f"Results saved to: {results_file}")
     print(f"Accuracy improvement: {results['improvement']['accuracy']:.3f}")
     print(f"Format accuracy improvement: {results['improvement']['format_accuracy']:.3f}")
+    
+    # Generate final plots if requested
+    if args.save_plots or args.show_plots:
+        print("\n📊 Generating final training plots...")
+        try:
+            # Add training history to results for visualization
+            results["training_history"] = trainer.get_training_summary()["training_history"]
+            
+            # Re-save with training history
+            with open(results_file, "w") as f:
+                json.dump(results, f, indent=4)
+            
+            # Create visualizations
+            from pathlib import Path
+            import sys
+            sys.path.append(str(Path(__file__).parent.parent / "src"))
+            from visualizer import TrainingVisualizer
+            
+            visualizer = TrainingVisualizer()
+            plot_name = f"grpo_{config.environment_name}_{Path(config.model_name).name}"
+            
+            # Training curves
+            visualizer.plot_grpo_training_curves(results["training_history"], plot_name)
+            
+            # Comparison plot
+            visualizer.plot_comparison(baseline_results, final_results, 
+                                     config.model_name, config.environment_name, plot_name)
+            
+            print("✅ Plots generated successfully!")
+            
+        except Exception as e:
+            print(f"⚠️  Warning: Could not generate plots: {e}")
 
 if __name__ == "__main__":
     main()

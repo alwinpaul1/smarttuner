@@ -41,6 +41,12 @@ def main():
     parser.add_argument("--eval_seed", type=int, default=123,
                        help="Seed for evaluation data generation")
     
+    # Visualization options
+    parser.add_argument("--show_plots", action="store_true",
+                       help="Show training plots after completion")
+    parser.add_argument("--save_plots", action="store_true",
+                       help="Save training plots automatically")
+    
     args = parser.parse_args()
     
     # Create config
@@ -76,17 +82,51 @@ def main():
     else:
         # Run full training
         print("Starting SFT training...")
+        if args.show_plots:
+            print("📊 Plot visualization enabled")
+        if args.save_plots:
+            print("💾 Plot saving enabled")
+            
         model, tokenizer, results = trainer.train()
         
-        # Save results
+        # Save results with training history
         os.makedirs("results", exist_ok=True)
         results_file = f"results/sft_{config.environment_name}_{config.model_name.split('/')[-1]}.json"
+        
+        # Add training history to results
+        complete_results = {
+            **results,
+            "training_history": trainer.get_training_summary()["training_history"],
+            "config": {
+                "model_name": config.model_name,
+                "environment_name": config.environment_name,
+                "num_datapoints": config.num_datapoints,
+                "num_epochs": config.num_epochs
+            }
+        }
+        
         with open(results_file, "w") as f:
-            json.dump(results, f, indent=4)
+            json.dump(complete_results, f, indent=4)
         
         print(f"Training completed!")
         print(f"Results saved to: {results_file}")
         print(f"Final results: {results}")
+        
+        # Generate plots if requested
+        if args.save_plots or args.show_plots:
+            print("\n📊 Generating SFT training plots...")
+            try:
+                plot_name = f"sft_{config.environment_name}_{config.model_name.split('/')[-1]}"
+                
+                if args.show_plots:
+                    trainer.show_training_plots(plot_name)
+                elif args.save_plots:
+                    trainer.show_training_plots(plot_name)  # This saves plots automatically
+                
+                print("✅ SFT plots generated successfully!")
+                
+            except Exception as e:
+                print(f"⚠️  Warning: Could not generate SFT plots: {e}")
 
 if __name__ == "__main__":
     main()

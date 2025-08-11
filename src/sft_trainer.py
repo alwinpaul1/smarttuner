@@ -15,7 +15,8 @@ from transformers import (
     AutoTokenizer, 
     Trainer, 
     TrainingArguments,
-    DataCollatorForLanguageModeling
+    DataCollatorForLanguageModeling,
+    TrainerCallback
 )
 from peft import LoraConfig, get_peft_model
 from reasoning_gym import create_dataset
@@ -25,6 +26,28 @@ from dataclasses import dataclass
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class SFTMetricsCallback(TrainerCallback):
+    """Custom callback to track SFT training metrics"""
+    
+    def __init__(self, sft_trainer):
+        self.sft_trainer = sft_trainer
+        
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Called when logging occurs"""
+        if logs is not None:
+            # Track training loss
+            if 'train_loss' in logs:
+                self.sft_trainer.training_history['train_losses'].append(logs['train_loss'])
+            
+            # Track learning rate
+            if 'learning_rate' in logs:
+                self.sft_trainer.training_history['learning_rates'].append(logs['learning_rate'])
+    
+    def on_evaluate(self, args, state, control, logs=None, **kwargs):
+        """Called after evaluation"""
+        if logs is not None and 'eval_loss' in logs:
+            self.sft_trainer.training_history['val_losses'].append(logs['eval_loss'])
 
 @dataclass
 class SFTConfig:
@@ -194,6 +217,16 @@ class SFTTrainer:
     
     def __init__(self, config: SFTConfig):
         self.config = config
+        
+        # Training metrics tracking
+        self.training_history = {
+            'train_losses': [],
+            'val_losses': [],
+            'train_accuracy': [],
+            'val_accuracy': [],
+            'learning_rates': []
+        }
+        
         self._setup_model_and_tokenizer()
     
     def _setup_model_and_tokenizer(self):
@@ -260,18 +293,23 @@ class SFTTrainer:
             mlm=False  # Causal LM
         )
         
-        # Create trainer
+        # Create trainer with metrics callback
+        metrics_callback = SFTMetricsCallback(self)
         trainer = Trainer(
             model=self.model,
             args=training_args,
             train_dataset=train_dataset,
             data_collator=data_collator,
-            tokenizer=self.tokenizer
+            tokenizer=self.tokenizer,
+            callbacks=[metrics_callback]
         )
         
         # Train
         logger.info("Starting SFT training...")
         trainer.train()
+        
+        # Save training history
+        self._save_training_history()
         
         # Save final model
         trainer.save_model()
@@ -377,6 +415,52 @@ It is critical to follow the above format."""
         
         logger.info(f"SFT Evaluation results: {results}")
         return results
+    
+    def _save_training_history(self) -> None:
+        """Save training history to JSON file"""
+        os.makedirs(self.config.output_dir, exist_ok=True)
+        history_file = os.path.join(self.config.output_dir, "training_history.json")
+        
+        with open(history_file, 'w') as f:
+            # Convert to serializable format
+            serializable_history = {}
+            for key, value in self.training_history.items():
+                if isinstance(value, list):
+                    serializable_history[key] = [float(x) if hasattr(x, 'item') else x for x in value]
+                else:
+                    serializable_history[key] = value
+            
+            json.dump(serializable_history, f, indent=4)
+        logger.info(f"SFT training history saved to: {history_file}")
+    
+    def show_training_plots(self, save_name: str = None) -> None:
+        """Show SFT training plots"""
+        try:
+            from .visualizer import TrainingVisualizer
+            
+            visualizer = TrainingVisualizer()
+            visualizer.plot_sft_training_curves(self.training_history, save_name)
+            
+        except ImportError:
+            logger.warning("Visualization module not available")
+        except Exception as e:
+            logger.warning(f"Error showing training plots: {e}")
+    
+    def get_training_summary(self) -> Dict[str, Any]:
+        """Get comprehensive SFT training summary"""
+        if not self.training_history['train_losses']:
+            return {"message": "No training completed yet"}
+            
+        summary = {
+            "total_epochs": len(self.training_history['train_losses']) if self.training_history['train_losses'] else 0,
+            "final_train_loss": self.training_history['train_losses'][-1] if self.training_history['train_losses'] else None,
+            "best_train_loss": min(self.training_history['train_losses']) if self.training_history['train_losses'] else None,
+            "final_val_loss": self.training_history['val_losses'][-1] if self.training_history['val_losses'] else None,
+            "best_val_loss": min(self.training_history['val_losses']) if self.training_history['val_losses'] else None,
+            "training_history": self.training_history
+        }
+        
+        return summary
 
 def run_sft_training(config: SFTConfig):
     """Run complete SFT training pipeline"""

@@ -102,6 +102,41 @@ uv run python scripts/train_grpo.py \
 python scripts/train_grpo.py --model_name models/sft
 ```
 
+### Training with Visualization
+
+```bash
+# Show real-time plots during GRPO training
+uv run python scripts/train_grpo.py \
+    --environment syllogism \
+    --show_plots
+
+# Save training plots automatically
+uv run python scripts/train_sft.py \
+    --environment syllogism \
+    --save_plots
+
+# Both real-time and saved plots
+uv run python scripts/full_pipeline.py \
+    --environment syllogism \
+    --show_plots --save_plots
+```
+
+### Analyze Training Results
+
+```bash
+# Visualize specific result file
+uv run python scripts/visualize_results.py --file results/grpo_syllogism_SmolLM-135M-Instruct.json
+
+# Interactive mode - select from available results
+uv run python scripts/visualize_results.py
+
+# Analyze all result files
+uv run python scripts/visualize_results.py --all
+
+# Compare multiple models
+uv run python scripts/visualize_results.py --compare results/sft_*.json --environment syllogism
+```
+
 ### Seed Configuration for Experimentation
 
 ```bash
@@ -175,6 +210,38 @@ target_modules: ["q_proj", "v_proj", "k_proj", "o_proj",
 | SmolLM-135M | Syllogism | 46% (SFT) | 60% | +14% |
 | SmolLM-360M | Syllogism | - | ~70% | ~+20% |
 | Qwen2.5-0.5B | Syllogism | - | 81% | ~+20% |
+
+## Visualization & Monitoring
+
+SmartTuner provides comprehensive visualization for training analysis:
+
+### Available Plots
+
+**GRPO Training Visualization:**
+- 📈 **PPO Loss Curves**: Training loss over iterations
+- 🎯 **Reward Statistics**: Mean rewards with standard deviation bands
+- 📊 **Accuracy Progress**: Task accuracy improvement during training  
+- ⚖️ **Reward Components**: Format vs correctness reward breakdown
+- 📉 **Reward Distribution Analysis**: Histograms and advantage analysis
+
+**SFT Training Visualization:**
+- 📈 **Loss Curves**: Training and validation loss over epochs
+- 🎯 **Accuracy Progress**: Training and validation accuracy curves
+- 📊 **Learning Rate Schedule**: Learning rate changes during training
+
+**Comparison Analysis:**
+- 📊 **Before/After Comparison**: Baseline vs final performance
+- 🏆 **Model Size Comparison**: Performance across different model sizes
+- 📈 **Improvement Metrics**: Percentage point improvements
+
+### Real-time Monitoring
+
+Enable live plotting during training to monitor progress:
+```bash
+uv run python scripts/train_grpo.py --show_plots --environment syllogism
+```
+
+All plots are saved as high-resolution PNG files in the `plots/` directory, perfect for research papers and presentations.
 
 ## Implementation Details
 
