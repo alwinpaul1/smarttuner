@@ -1,0 +1,77 @@
+# Configuration for small models as mentioned in the article
+# SmolLM-135M, SmolLM-360M, and Qwen3-0.6B
+
+models:
+  smollm_135m:
+    name: "HuggingfaceTB/SmolLM-135M-Instruct"
+    parameters: "135M"
+    description: "Smallest model tested in the article"
+    
+  smollm_360m:
+    name: "HuggingfaceTB/SmolLM-360M-Instruct" 
+    parameters: "360M"
+    description: "Medium small model"
+    
+  qwen_600m:
+    name: "Qwen/Qwen2.5-0.5B-Instruct"
+    parameters: "600M"
+    description: "Largest small model (achieved 81% accuracy on syllogism)"
+
+# Environments from the article
+environments:
+  syllogism:
+    name: "syllogism"
+    description: "Logical puzzle with two premises and conclusion (YES/NO)"
+    difficulty: "easier"
+    expected_accuracy_after_grpo: "60-81%"
+    
+  propositional_logic:
+    name: "propositional_logic" 
+    description: "Symbolic reasoning task with generated conclusions"
+    difficulty: "harder"
+    expected_accuracy_after_grpo: "varies"
+
+# SFT Configuration (from article)
+sft:
+  num_datapoints: 200
+  num_epochs: 3
+  learning_rate: 5e-5
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  
+  lora:
+    r: 32
+    lora_alpha: 64
+    lora_dropout: 0
+    target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", 
+                     "up_proj", "down_proj", "gate_proj"]
+  
+  # Reproducibility and experimentation
+  dataset_seed: 42  # Seed for training data generation
+  eval_seed: 123    # Seed for evaluation data (different for unbiased eval)
+
+# GRPO Configuration (from article)
+grpo:
+  max_new_tokens: 300  # reasoning + answer token budget
+  exploration_batchsize: 8  # number of questions per batch during rollout
+  G: 6  # num responses per group
+  temperature: 0.7
+  batch_size: 16  # minibatch size during training
+  gradient_accumulation_steps: 12
+  learning_rate: 0.000001  # Keep low (1e-6 or 1e-7)
+  top_p: 0.95
+  buffer_size: 500
+  ppo_clip_ratio: 0.2
+  
+  # Reward weights
+  correctness_reward_weight: 0.85
+  format_reward_weight: 0.15
+  
+  # Training
+  num_iterations: 10
+  dataset_size_per_iteration: 100
+  save_every: 100
+  
+  # Reproducibility and experimentation  
+  dataset_seed: 42  # Seed for experience collection data
+  eval_seed: 123    # Seed for evaluation data (different for unbiased eval)

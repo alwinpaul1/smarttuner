@@ -1,0 +1,85 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTorch
+*.pt
+*.pth
+*.ckpt
+
+# Hugging Face
+.cache/
+huggingface_hub/
+
+# Data and models (created automatically by scripts)
+data/
+models/
+results/
+
+# Logs
+*.log
+logs/
+wandb/
+tensorboard_logs/
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OpenAI API key
+openai_key.txt
+.openai_key
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Ignore all markdown files
+*.md
+# But do not ignore README.md
+!README.md
