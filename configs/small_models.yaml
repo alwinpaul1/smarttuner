@@ -24,12 +24,24 @@ environments:
     description: "Logical puzzle with two premises and conclusion (YES/NO)"
     difficulty: "easier"
     expected_accuracy_after_grpo: "60-81%"
+    system_prompt: |
+      A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
+      The assistant first thinks about the reasoning process in the mind and then provides the user
+      with the answer. The reasoning process and answer are enclosed within <think> </think> and
+      <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think>
+      <answer> answer here </answer>.
     
   propositional_logic:
     name: "propositional_logic" 
     description: "Symbolic reasoning task with generated conclusions"
     difficulty: "harder"
     expected_accuracy_after_grpo: "varies"
+    system_prompt: |
+      A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
+      The assistant first thinks about the reasoning process in the mind and then provides the user
+      with the answer. The reasoning process and answer are enclosed within <think> </think> and
+      <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think>
+      <answer> answer here </answer>.
 
 # SFT Configuration (from article)
 sft:

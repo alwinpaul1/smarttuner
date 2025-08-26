@@ -345,6 +345,104 @@ Std: {np.std(advantages_data):.3f}"""
                                model_name, environment, output_name)
         
         print(f"Training report saved to: {self.save_dir}")
+    
+    def save_grpo_training_curves(self, training_history: Dict[str, List], save_name: str) -> None:
+        """Save GRPO training curves to file without displaying them"""
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        fig.suptitle('GRPO Training Progress', fontsize=16, fontweight='bold')
+        
+        iterations = range(1, len(training_history.get('losses', [])) + 1)
+        
+        # Training Loss
+        if 'losses' in training_history:
+            axes[0, 0].plot(iterations, training_history['losses'], 'b-', linewidth=2, marker='o')
+            axes[0, 0].set_title('PPO Training Loss', fontweight='bold')
+            axes[0, 0].set_xlabel('Iteration')
+            axes[0, 0].set_ylabel('Loss')
+            axes[0, 0].grid(True, alpha=0.3)
+        
+        # Reward Statistics
+        if 'mean_rewards' in training_history and 'reward_stds' in training_history:
+            mean_rewards = training_history['mean_rewards']
+            reward_stds = training_history['reward_stds']
+            
+            axes[0, 1].plot(iterations, mean_rewards, 'g-', linewidth=2, marker='s', label='Mean Reward')
+            axes[0, 1].fill_between(iterations, 
+                                  np.array(mean_rewards) - np.array(reward_stds),
+                                  np.array(mean_rewards) + np.array(reward_stds),
+                                  alpha=0.3, color='green')
+            axes[0, 1].set_title('Reward Distribution (Mean ± Std)', fontweight='bold')
+            axes[0, 1].set_xlabel('Iteration')
+            axes[0, 1].set_ylabel('Reward')
+            axes[0, 1].grid(True, alpha=0.3)
+            axes[0, 1].legend()
+        
+        # Accuracy Progress
+        if 'accuracies' in training_history:
+            axes[1, 0].plot(iterations, training_history['accuracies'], 'r-', linewidth=2, marker='^')
+            axes[1, 0].set_title('Accuracy Over Training', fontweight='bold')
+            axes[1, 0].set_xlabel('Iteration')
+            axes[1, 0].set_ylabel('Accuracy (%)')
+            axes[1, 0].set_ylim(0, 100)
+            axes[1, 0].grid(True, alpha=0.3)
+        
+        # Format vs Correctness Rewards
+        if 'format_rewards' in training_history and 'correctness_rewards' in training_history:
+            axes[1, 1].plot(iterations, training_history['format_rewards'], 'orange', 
+                          linewidth=2, marker='d', label='Format Reward (15%)')
+            axes[1, 1].plot(iterations, training_history['correctness_rewards'], 'purple', 
+                          linewidth=2, marker='v', label='Correctness Reward (85%)')
+            axes[1, 1].set_title('Reward Components', fontweight='bold')
+            axes[1, 1].set_xlabel('Iteration')
+            axes[1, 1].set_ylabel('Reward Value')
+            axes[1, 1].grid(True, alpha=0.3)
+            axes[1, 1].legend()
+        
+        plt.tight_layout()
+        plt.savefig(self.save_dir / f"{save_name}_grpo_training.png", dpi=300, bbox_inches='tight')
+        plt.close()  # Close to free memory
+    
+    def save_sft_training_curves(self, training_history: Dict[str, List], save_name: str) -> None:
+        """Save SFT training curves to file without displaying them"""
+        fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+        fig.suptitle('Supervised Fine-tuning Progress', fontsize=16, fontweight='bold')
+        
+        epochs = range(1, len(training_history.get('train_losses', [])) + 1)
+        
+        # Training and Validation Loss
+        if 'train_losses' in training_history:
+            axes[0].plot(epochs, training_history['train_losses'], 'b-', 
+                        linewidth=2, marker='o', label='Training Loss')
+            
+        if 'val_losses' in training_history:
+            axes[0].plot(epochs, training_history['val_losses'], 'r--', 
+                        linewidth=2, marker='s', label='Validation Loss')
+            
+        axes[0].set_title('Training Loss', fontweight='bold')
+        axes[0].set_xlabel('Epoch')
+        axes[0].set_ylabel('Loss')
+        axes[0].grid(True, alpha=0.3)
+        axes[0].legend()
+        
+        # Accuracy Progress
+        if 'train_accuracy' in training_history:
+            axes[1].plot(epochs, training_history['train_accuracy'], 'g-', 
+                        linewidth=2, marker='^', label='Training Accuracy')
+            
+        if 'val_accuracy' in training_history:
+            axes[1].plot(epochs, training_history['val_accuracy'], 'orange', 
+                        linewidth=2, marker='d', label='Validation Accuracy')
+            
+        axes[1].set_title('Accuracy Progress', fontweight='bold')
+        axes[1].set_xlabel('Epoch')
+        axes[1].set_ylabel('Accuracy (%)')
+        axes[1].set_ylim(0, 100)
+        axes[1].grid(True, alpha=0.3)
+        axes[1].legend()
+        
+        plt.tight_layout()
+        plt.savefig(self.save_dir / f"{save_name}_sft_training.png", dpi=300, bbox_inches='tight')
+        plt.close()  # Close to free memory
         
     def save_all_plots(self, prefix: str = "training") -> None:
         """Save all generated plots with timestamp"""

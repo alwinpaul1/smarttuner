@@ -8,6 +8,8 @@ import os
 import asyncio
 import openai
 import backoff
+import yaml
+from pathlib import Path
 from dotenv import load_dotenv
 from typing import List, Dict, Any
 import torch
@@ -142,8 +144,49 @@ class SFTDataGenerator:
         self.client = openai.AsyncClient()
         self.semaphore = asyncio.Semaphore(config.max_concurrent_requests)
         
-        # System prompt with answer injection for SFT
-        self.system_prompt = """A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
+        # Load system prompt from config file
+        self.system_prompt = self._load_system_prompt()
+    
+    def _load_system_prompt(self) -> str:
+        """Load system prompt from configuration file"""
+        try:
+            config_path = Path(__file__).parent.parent / "configs" / "small_models.yaml"
+            with open(config_path, 'r') as f:
+                config_data = yaml.safe_load(f)
+            
+            env_config = config_data.get('environments', {}).get(self.config.environment_name, {})
+            system_prompt = env_config.get('system_prompt', '')
+            
+            if system_prompt:
+                # Add SFT-specific instructions to the base system prompt
+                sft_instructions = """
+
+Do not generate new code. Do not write python code.
+
+You may also be given examples by the user telling you the expected response format.
+Follow the format of the examples, but solve the specific problem asked by the user, not the examples.
+
+Very important - Remember again, your output format should be:
+<think> reasoning process here </think>
+<answer> answer here </answer>
+
+Your response will be scored by extracting the substring between the <answer>...</answer> tags.
+It is critical to follow the above format.
+Failing to follow the response format will result in a penalty.
+
+You will also be provided the real answer. Your thinking should eventually result in producing the real answer."""
+                return system_prompt + sft_instructions
+            else:
+                # Fallback to default system prompt if not found in config
+                return self._get_default_system_prompt()
+                
+        except Exception as e:
+            print(f"Warning: Could not load system prompt from config: {e}")
+            return self._get_default_system_prompt()
+    
+    def _get_default_system_prompt(self) -> str:
+        """Default system prompt as fallback"""
+        return """A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
 The assistant first thinks about the reasoning process in the mind and then provides the user
 with the answer. The reasoning process and answer are enclosed within <think> </think> and
 <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think>
@@ -197,6 +240,17 @@ Answer: {item['answer']}
     
     async def generate_dataset(self) -> List[Dict]:
         """Generate complete SFT dataset"""
+        # Validate OpenAI API key
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "OpenAI API key not found. Please set the OPENAI_API_KEY environment variable. "
+                "You can do this by:\n"
+                "1. Creating a .env file in the project root with: OPENAI_API_KEY=your_api_key\n"
+                "2. Or exporting the variable: export OPENAI_API_KEY=your_api_key\n"
+                "Get your API key from: https://platform.openai.com/api-keys"
+            )
+        
         # Check if data already exists
         os.makedirs("data", exist_ok=True)
         filename = f"data/sft_{self.config.environment_name}_{self.config.openai_model}.json"
@@ -255,13 +309,24 @@ class SFTTrainer:
         """Load and setup model with LoRA"""
         logger.info(f"Loading model: {self.config.model_name}")
         
-        # Load model and tokenizer
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name,
-            torch_dtype=torch.bfloat16,
-            device_map="auto"
-        )
-        self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+        # Load model and tokenizer with error handling
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.config.model_name,
+                torch_dtype=torch.bfloat16,
+                device_map="auto"
+            )
+        except OSError as e:
+            raise RuntimeError(f"Failed to load model '{self.config.model_name}'. Please check if the model name is correct and you have internet access. Original error: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error while loading model '{self.config.model_name}': {e}")
+        
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+        except OSError as e:
+            raise RuntimeError(f"Failed to load tokenizer for '{self.config.model_name}'. Please check if the model name is correct and you have internet access. Original error: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error while loading tokenizer for '{self.config.model_name}': {e}")
         
         # Set pad token
         if self.tokenizer.pad_token is None:
@@ -346,6 +411,31 @@ class SFTTrainer:
         """Get evaluation system prompt (configurable or default)"""
         if self.config.eval_system_prompt:
             return self.config.eval_system_prompt
+        
+        # Load from config file if available
+        try:
+            config_path = Path(__file__).parent.parent / "configs" / "small_models.yaml"
+            with open(config_path, 'r') as f:
+                config_data = yaml.safe_load(f)
+            
+            env_config = config_data.get('environments', {}).get(self.config.environment_name, {})
+            system_prompt = env_config.get('system_prompt', '')
+            
+            if system_prompt:
+                # Add evaluation-specific instructions to the base system prompt
+                eval_instructions = """
+
+Do not generate new code. Do not write python code.
+
+Very important - Remember again, your output format should be:
+<think> reasoning process here </think>
+<answer> answer here </answer>
+
+Your response will be scored by extracting the substring between the <answer>...</answer> tags.
+It is critical to follow the above format."""
+                return system_prompt + eval_instructions
+        except Exception as e:
+            print(f"Warning: Could not load eval system prompt from config: {e}")
         
         # Default evaluation system prompt
         return """A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
@@ -485,7 +575,7 @@ It is critical to follow the above format."""
             from .visualizer import TrainingVisualizer
             
             visualizer = TrainingVisualizer()
-            visualizer.plot_sft_training_curves(self.training_history, save_name, show_plots=False)
+            visualizer.save_sft_training_curves(self.training_history, save_name)
             
         except ImportError:
             logger.warning("Visualization module not available")

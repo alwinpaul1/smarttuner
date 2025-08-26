@@ -6,6 +6,8 @@ Following the implementation described in the TowardsDataScience article.
 import re
 import json
 import numpy as np
+import yaml
+from pathlib import Path
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -75,8 +77,51 @@ class GRPOTrainer:
             'correctness_rewards': []
         }
         
-        # System prompt as defined in the article
-        self.system_prompt = """A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
+        # Load system prompt from config file
+        self.system_prompt = self._load_system_prompt()
+        
+        self._setup_model_and_tokenizer()
+        self._setup_environment()
+        self.memory_buffer = []
+    
+    def _load_system_prompt(self) -> str:
+        """Load system prompt from configuration file"""
+        try:
+            config_path = Path(__file__).parent.parent / "configs" / "small_models.yaml"
+            with open(config_path, 'r') as f:
+                config_data = yaml.safe_load(f)
+            
+            env_config = config_data.get('environments', {}).get(self.config.environment_name, {})
+            system_prompt = env_config.get('system_prompt', '')
+            
+            if system_prompt:
+                # Add GRPO-specific instructions to the base system prompt
+                grpo_instructions = """
+
+Do not generate new code. Do not write python code.
+
+You may also be given examples by the user telling you the expected response format.
+Follow the format of the examples, but solve the specific problem asked by the user, not the examples.
+
+Very important - Remember again, your output format should be:
+<think> reasoning process here </think>
+<answer> answer here </answer>
+
+Your response will be scored by extracting the substring between the <answer>...</answer> tags.
+It is critical to follow the above format.
+Failing to follow the response format will result in a penalty."""
+                return system_prompt + grpo_instructions
+            else:
+                # Fallback to default system prompt if not found in config
+                return self._get_default_system_prompt()
+                
+        except Exception as e:
+            print(f"Warning: Could not load system prompt from config: {e}")
+            return self._get_default_system_prompt()
+    
+    def _get_default_system_prompt(self) -> str:
+        """Default system prompt as fallback"""
+        return """A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
 The assistant first thinks about the reasoning process in the mind and then provides the user
 with the answer. The reasoning process and answer are enclosed within <think> </think> and
 <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think>
@@ -95,21 +140,28 @@ Your response will be scored by extracting the substring between the <answer>...
 It is critical to follow the above format.
 Failing to follow the response format will result in a penalty."""
         
-        self._setup_model_and_tokenizer()
-        self._setup_environment()
-        self.memory_buffer = []
-        
     def _setup_model_and_tokenizer(self):
         """Load model and tokenizer with LoRA configuration"""
         logger.info(f"Loading model: {self.config.model_name}")
         
-        # Load model and tokenizer
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name,
-            torch_dtype=torch.bfloat16,
-            device_map="auto"
-        )
-        self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+        # Load model and tokenizer with error handling
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.config.model_name,
+                torch_dtype=torch.bfloat16,
+                device_map="auto"
+            )
+        except OSError as e:
+            raise RuntimeError(f"Failed to load model '{self.config.model_name}'. Please check if the model name is correct and you have internet access. Original error: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error while loading model '{self.config.model_name}': {e}")
+        
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+        except OSError as e:
+            raise RuntimeError(f"Failed to load tokenizer for '{self.config.model_name}'. Please check if the model name is correct and you have internet access. Original error: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error while loading tokenizer for '{self.config.model_name}': {e}")
         
         # Set pad token if not exists
         if self.tokenizer.pad_token is None:
@@ -516,7 +568,7 @@ Failing to follow the response format will result in a penalty."""
             from .visualizer import TrainingVisualizer
             
             visualizer = TrainingVisualizer()
-            visualizer.plot_grpo_training_curves(self.training_history, save_name=save_name, show_plots=False)
+            visualizer.save_grpo_training_curves(self.training_history, save_name)
             
         except ImportError:
             logger.warning("Visualization module not available for saving plots")
