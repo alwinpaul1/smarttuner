@@ -40,13 +40,18 @@ class GRPOConfig:
     buffer_size: int = 500
     num_epochs: int = 3
     ppo_clip_ratio: float = 0.2
-    correctness_reward_weight: float = 0.85
-    format_reward_weight: float = 0.15
+    correctness_reward_weight: float = 0.6
+    format_reward_weight: float = 0.4  # Increased to prioritize format learning
     save_every: int = 100
     
     # Reproducibility and experimentation
     dataset_seed: int = 42
     eval_seed: int = 123
+    
+    # Multi-stage reward system
+    use_graduated_rewards: bool = True
+    initial_format_weight: float = 0.6  # High format emphasis initially
+    final_format_weight: float = 0.2    # Lower format emphasis finally
     
     # LoRA config
     lora_r: int = 32
@@ -74,8 +79,14 @@ class GRPOTrainer:
             'reward_stds': [],
             'accuracies': [],
             'format_rewards': [],
-            'correctness_rewards': []
+            'correctness_rewards': [],
+            'format_weights': [],  # Track dynamic format weights
+            'correctness_weights': []  # Track dynamic correctness weights
         }
+        
+        # Current training iteration (for graduated rewards)
+        self.current_iteration = 0
+        self.memory_buffer = []  # Experience replay buffer
         
         # Load system prompt from config file
         self.system_prompt = self._load_system_prompt()
@@ -200,16 +211,80 @@ Failing to follow the response format will result in a penalty."""
             return ""
             
     def calculate_format_reward(self, response: str) -> float:
-        """Calculate format reward for proper tag usage"""
-        has_think_tags = bool(re.search(r"<think>.*?</think>", response, re.DOTALL))
-        has_answer_tags = bool(re.search(r"<answer>.*?</answer>", response, re.DOTALL))
+        """Calculate format reward for proper tag usage - enhanced for better learning"""
+        # Check for proper opening and closing tags
+        has_think_open = "<think>" in response.lower()
+        has_think_close = "</think>" in response.lower()
+        has_answer_open = "<answer>" in response.lower()
+        has_answer_close = "</answer>" in response.lower()
         
-        if has_think_tags and has_answer_tags:
-            return 1.0
-        elif has_answer_tags:
-            return 0.5
+        # Full format compliance - both tags properly used
+        if has_think_open and has_think_close and has_answer_open and has_answer_close:
+            # Check if there's content in both sections
+            think_content = re.search(r"<think>(.*?)</think>", response, re.DOTALL | re.IGNORECASE)
+            answer_content = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL | re.IGNORECASE)
+            
+            if think_content and answer_content:
+                think_text = think_content.group(1).strip()
+                answer_text = answer_content.group(1).strip()
+                if len(think_text) > 10 and len(answer_text) > 0:  # Substantial thinking
+                    return 1.0
+                elif len(think_text) > 0 and len(answer_text) > 0:  # Some content
+                    return 0.9
+                else:
+                    return 0.7  # Tags present but minimal content
+            else:
+                return 0.6  # Tags present but regex didn't match (malformed)
+        
+        # Partial compliance - encourage progress
+        elif has_answer_open and has_answer_close:
+            # At least answer tags are present
+            answer_content = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL | re.IGNORECASE)
+            if answer_content and len(answer_content.group(1).strip()) > 0:
+                return 0.5
+            else:
+                return 0.3
+        elif has_think_open and has_think_close:
+            # Think tags present but no answer tags
+            think_content = re.search(r"<think>(.*?)</think>", response, re.DOTALL | re.IGNORECASE)
+            if think_content and len(think_content.group(1).strip()) > 0:
+                return 0.4
+            else:
+                return 0.2
+        elif has_think_open or has_answer_open:
+            # At least attempting to use tags
+            return 0.1
         else:
+            # No tag usage at all
             return 0.0
+            
+    def get_dynamic_reward_weights(self, iteration: int, total_iterations: int = 10) -> tuple:
+        """Calculate dynamic reward weights for graduated training"""
+        if not self.config.use_graduated_rewards:
+            return self.config.correctness_reward_weight, self.config.format_reward_weight
+        
+        # Calculate progression (0.0 to 1.0)
+        progress = min(iteration / total_iterations, 1.0)
+        
+        # Stage 1 (0-30%): High format emphasis
+        if progress <= 0.3:
+            format_weight = self.config.initial_format_weight
+            correctness_weight = 1.0 - format_weight
+        # Stage 2 (30-70%): Gradual transition
+        elif progress <= 0.7:
+            # Linear interpolation between initial and final weights
+            transition_progress = (progress - 0.3) / 0.4  # 0.0 to 1.0 for this stage
+            format_weight = self.config.initial_format_weight - \
+                           (self.config.initial_format_weight - self.config.format_reward_weight) * transition_progress
+            correctness_weight = 1.0 - format_weight
+        # Stage 3 (70-100%): Focus on correctness
+        else:
+            final_progress = (progress - 0.7) / 0.3  # 0.0 to 1.0 for final stage
+            format_weight = self.config.format_reward_weight - \
+                           (self.config.format_reward_weight - self.config.final_format_weight) * final_progress
+            correctness_weight = 1.0 - format_weight
+        
+        return correctness_weight, format_weight
     
     def calculate_log_probs(self, model, input_ids: torch.Tensor, response_mask: torch.Tensor) -> torch.Tensor:
         """Calculate log probabilities of generated tokens"""
@@ -235,6 +310,15 @@ Failing to follow the response format will result in a penalty."""
         """Calculate PPO clipped surrogate loss as described in article"""
         # Calculate ratio
         ratio = torch.exp(new_log_probs - old_log_probs)
+        
+        # Expand advantages to match sequence dimension for broadcasting
+        # advantages shape: [batch_size] -> [batch_size, 1] for broadcasting
+        if advantages.dim() == 1:
+            advantages = advantages.unsqueeze(-1)
+        
+        # Validate tensor dimensions
+        if ratio.shape[0] != advantages.shape[0]:
+            raise ValueError(f"Batch size mismatch: ratio {ratio.shape} vs advantages {advantages.shape}")
         
         # Calculate surrogate losses
         surr1 = ratio * advantages
@@ -319,13 +403,18 @@ Failing to follow the response format will result in a penalty."""
                         full_text = self.tokenizer.decode(seq, skip_special_tokens=True)
                         response_text = self.tokenizer.decode(seq[input_length:], skip_special_tokens=True)
                         
-                        # Calculate rewards
+                        # Calculate rewards with dynamic weights
                         extracted_answer = self.extract_answer(response_text)
                         correctness_reward = score_fn(extracted_answer, batch[q_idx])
                         format_reward = self.calculate_format_reward(response_text)
                         
-                        total_reward = (correctness_reward * self.config.correctness_reward_weight + 
-                                      format_reward * self.config.format_reward_weight)
+                        # Get dynamic reward weights based on current iteration
+                        correctness_weight, format_weight = self.get_dynamic_reward_weights(
+                            self.current_iteration, total_iterations=10
+                        )
+                        
+                        total_reward = (correctness_reward * correctness_weight + 
+                                      format_reward * format_weight)
                         
                         responses.append(response_text)
                         rewards.append(total_reward)
@@ -366,8 +455,14 @@ Failing to follow the response format will result in a penalty."""
             self.training_history['correctness_rewards'].append(np.mean(all_correctness_rewards))
             self.training_history['format_rewards'].append(np.mean(all_format_rewards))
         
+        # Calculate format accuracy from collected experiences
+        format_accuracies = [1.0 if reward > 0.5 else 0.0 for reward in all_format_rewards]
+        current_format_accuracy = np.mean(format_accuracies) if format_accuracies else 0.0
+        
         logger.info(f"Collected {len(self.memory_buffer)} experiences")
         logger.info(f"Mean reward: {np.mean(all_rewards):.3f} ± {np.std(all_rewards):.3f}")
+        logger.info(f"Format accuracy: {current_format_accuracy:.1%} ({int(current_format_accuracy * len(format_accuracies))}/{len(format_accuracies)} responses with proper tags)")
+        logger.info(f"Mean format reward: {np.mean(all_format_rewards):.3f}")
     
     def training_phase(self) -> float:
         """Training phase using collected experiences"""
@@ -437,17 +532,37 @@ Failing to follow the response format will result in a penalty."""
         for iteration in range(num_iterations):
             logger.info(f"=== Iteration {iteration + 1}/{num_iterations} ===")
             
+            # Update current iteration for dynamic reward weighting
+            self.current_iteration = iteration + 1
+            
+            # Get and log current reward weights
+            correctness_weight, format_weight = self.get_dynamic_reward_weights(
+                self.current_iteration, total_iterations=num_iterations
+            )
+            logger.info(f"Dynamic weights - Correctness: {correctness_weight:.3f}, Format: {format_weight:.3f}")
+            
             # Experience collection phase
             self.experience_collection(dataset_size_per_iteration)
             
             # Training phase
             avg_loss = self.training_phase()
             
+            # Track dynamic weights in training history
+            self.training_history['correctness_weights'].append(correctness_weight)
+            self.training_history['format_weights'].append(format_weight)
+            
             # Evaluate accuracy periodically
             if (iteration + 1) % max(1, num_iterations // 5) == 0:  # Evaluate 5 times during training
                 eval_results = self.evaluate(test_size=50)  # Quick evaluation
                 self.training_history['accuracies'].append(eval_results['accuracy'] * 100)
-                logger.info(f"Current accuracy: {eval_results['accuracy']:.3f}")
+                logger.info(f"Current accuracy: {eval_results['accuracy']:.1%}")
+                logger.info(f"Current format accuracy: {eval_results['format_accuracy']:.1%}")
+                
+                # Log progress summary
+                if len(self.training_history['accuracies']) > 1:
+                    prev_accuracy = self.training_history['accuracies'][-2] / 100
+                    accuracy_change = eval_results['accuracy'] - prev_accuracy
+                    logger.info(f"Accuracy change: {accuracy_change:+.1%}")
             
             # Show real-time plots if requested  
             if (show_plots or save_plots) and len(self.training_history['losses']) > 1:

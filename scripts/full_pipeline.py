@@ -17,8 +17,8 @@ from grpo_trainer import GRPOTrainer, GRPOConfig
 
 def main():
     parser = argparse.ArgumentParser(description="Run complete training pipeline: SFT -> GRPO")
-    parser.add_argument("--base_model", type=str, default="HuggingfaceTB/SmolLM-135M-Instruct",
-                       help="Base model to start with")
+    parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct",
+                       help="Base model to start with (Qwen2.5-0.5B shows 81% potential)")
     parser.add_argument("--environment", type=str, default="syllogism", 
                        choices=["syllogism", "propositional_logic"],
                        help="Environment to train on")
@@ -120,16 +120,20 @@ def main():
     grpo_config = GRPOConfig(
         model_name=sft_model_path,
         environment_name=args.environment,
-        # Use hyperparameters from the article
-        max_new_tokens=300,
-        exploration_batchsize=8,
-        G=6,
-        temperature=0.7,
-        batch_size=16,
-        gradient_accumulation_steps=12,
-        learning_rate=1e-6,
-        top_p=0.95,
-        buffer_size=500
+        # Optimized parameters for Qwen2.5-0.5B and format learning
+        max_new_tokens=250,  # Enough for reasoning + answer
+        exploration_batchsize=6,  # Balanced for diverse responses
+        G=5,  # Good group size for relative advantages
+        temperature=0.8,  # Higher temperature for diverse reasoning
+        batch_size=12,  # Increased for better gradient estimation
+        gradient_accumulation_steps=6,  # Balanced accumulation
+        learning_rate=2e-6,  # Slightly higher for faster format learning
+        top_p=0.9,  # More focused sampling
+        buffer_size=400,  # More experience replay
+        # Multi-stage reward system enabled
+        use_graduated_rewards=True,
+        initial_format_weight=0.6,  # High format emphasis initially
+        final_format_weight=0.2     # Lower format emphasis finally
     )
     
     print(f"Training GRPO model for {args.grpo_iterations} iterations...")
