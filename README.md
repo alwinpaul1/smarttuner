@@ -38,6 +38,14 @@ The training pipeline follows a two-phase approach:
 git clone <repository-url>
 cd smarttuner
 
+# Create virtual environment (required)
+uv venv venv
+
+# Activate virtual environment
+source venv/bin/activate  # On macOS/Linux
+# or
+venv\Scripts\activate     # On Windows
+
 # Install dependencies with uv (faster)
 uv pip install -r requirements.txt
 
