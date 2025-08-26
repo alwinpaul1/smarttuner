@@ -275,6 +275,9 @@ class SFTTrainer:
         train_dataset = ReasoningDataset(sft_data, self.tokenizer)
         
         # Setup training arguments
+        import torch
+        use_fp16 = torch.cuda.is_available()  # Only use fp16 on CUDA devices
+        
         training_args = TrainingArguments(
             output_dir=self.config.output_dir,
             num_train_epochs=self.config.num_epochs,
@@ -284,7 +287,7 @@ class SFTTrainer:
             warmup_steps=self.config.warmup_steps,
             logging_steps=self.config.logging_steps,
             save_steps=self.config.save_steps,
-            fp16=True,
+            fp16=use_fp16,
             dataloader_drop_last=True,
             remove_unused_columns=False,
             report_to=None,

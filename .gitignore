@@ -31,7 +31,6 @@ MANIFEST
 huggingface_hub/
 
 # Data and models (created automatically by scripts)
-data/
 models/
 results/
 
