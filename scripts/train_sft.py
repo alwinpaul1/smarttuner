@@ -118,10 +118,12 @@ def main():
             try:
                 plot_name = f"sft_{config.environment_name}_{config.model_name.split('/')[-1]}"
                 
-                if args.show_plots:
-                    trainer.show_training_plots(plot_name)
+                if args.show_plots and args.save_plots:
+                    trainer.show_training_plots(plot_name)  # Show and save
+                elif args.show_plots:
+                    trainer.show_training_plots(plot_name)  # Show only
                 elif args.save_plots:
-                    trainer.show_training_plots(plot_name)  # This saves plots automatically
+                    trainer.save_training_plots(plot_name)  # Save only
                 
                 print("✅ SFT plots generated successfully!")
                 

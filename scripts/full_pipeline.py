@@ -31,6 +31,10 @@ def main():
     parser.add_argument("--openai_model", type=str, default="gpt-4o-mini",
                        help="OpenAI model for SFT data generation")
     
+    # Model path options
+    parser.add_argument("--grpo_model_path", type=str, default=None,
+                       help="Explicit model path for GRPO stage (overrides default SFT output)")
+    
     # GRPO parameters  
     parser.add_argument("--grpo_iterations", type=int, default=10,
                        help="Number of GRPO iterations")
@@ -89,14 +93,24 @@ def main():
         sft_model_path = str(sft_output)
     else:
         print("Skipping SFT - using existing model...")
-        sft_model_path = str(sft_output)
+        
+        # Use explicit path if provided, otherwise use default SFT output path
+        if args.grpo_model_path:
+            sft_model_path = args.grpo_model_path
+            print(f"Using explicit model path: {sft_model_path}")
+        else:
+            sft_model_path = str(sft_output)
+            print(f"Using default SFT output path: {sft_model_path}")
         
         if not os.path.exists(sft_model_path):
-            print(f"ERROR: SFT model not found at {sft_model_path}")
-            print("Please run SFT first or provide correct path")
+            print(f"ERROR: Model not found at {sft_model_path}")
+            if args.grpo_model_path:
+                print("Please check the --grpo_model_path argument")
+            else:
+                print("Please run SFT first or use --grpo_model_path to specify model location")
             return
         
-        print(f"Using SFT model from: {sft_model_path}")
+        print(f"✅ Found model at: {sft_model_path}")
     
     # Stage 2: GRPO Training
     print("=" * 60)  

@@ -25,7 +25,8 @@ class TrainingVisualizer:
         self.figsize = figsize
         
     def plot_grpo_training_curves(self, training_history: Dict[str, List], 
-                                save_name: Optional[str] = None) -> None:
+                                save_name: Optional[str] = None, 
+                                show_plots: bool = True) -> None:
         """Plot GRPO training curves: loss, rewards, and accuracy over iterations"""
         
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
@@ -82,10 +83,15 @@ class TrainingVisualizer:
         
         if save_name:
             plt.savefig(self.save_dir / f"{save_name}_grpo_training.png", dpi=300, bbox_inches='tight')
-        plt.show()
+        
+        if show_plots:
+            plt.show()
+        else:
+            plt.close()
     
     def plot_sft_training_curves(self, training_history: Dict[str, List], 
-                               save_name: Optional[str] = None) -> None:
+                               save_name: Optional[str] = None, 
+                               show_plots: bool = True) -> None:
         """Plot SFT training curves: loss and accuracy over epochs"""
         
         fig, axes = plt.subplots(1, 2, figsize=(15, 6))
@@ -128,7 +134,11 @@ class TrainingVisualizer:
         
         if save_name:
             plt.savefig(self.save_dir / f"{save_name}_sft_training.png", dpi=300, bbox_inches='tight')
-        plt.show()
+        
+        if show_plots:
+            plt.show()
+        else:
+            plt.close()
     
     def plot_reward_analysis(self, rewards_data: List[float], advantages_data: List[float],
                            save_name: Optional[str] = None) -> None:

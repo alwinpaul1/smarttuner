@@ -76,6 +76,9 @@ class SFTConfig:
     lora_dropout: float = 0.0
     lora_target_modules: List[str] = None
     
+    # Evaluation configuration
+    eval_system_prompt: str = None  # If None, uses default prompt
+    
     # Reproducibility and experimentation
     dataset_seed: int = 42
     eval_seed: int = 123
@@ -339,18 +342,13 @@ class SFTTrainer:
         
         return self.model, self.tokenizer
     
-    def evaluate_sft_model(self, test_size: int = 50) -> Dict[str, float]:
-        """Evaluate SFT model performance"""
-        logger.info("Evaluating SFT model...")
+    def get_eval_system_prompt(self) -> str:
+        """Get evaluation system prompt (configurable or default)"""
+        if self.config.eval_system_prompt:
+            return self.config.eval_system_prompt
         
-        from reasoning_gym import get_score_answer_fn
-        import re
-        
-        # Create test dataset
-        test_dataset = create_dataset(self.config.environment_name, seed=self.config.eval_seed, size=test_size)
-        
-        # System prompt for evaluation (without answer hint)
-        eval_system_prompt = """A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
+        # Default evaluation system prompt
+        return """A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
 The assistant first thinks about the reasoning process in the mind and then provides the user
 with the answer. The reasoning process and answer are enclosed within <think> </think> and
 <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think>
@@ -364,6 +362,19 @@ Very important - Remember again, your output format should be:
 
 Your response will be scored by extracting the substring between the <answer>...</answer> tags.
 It is critical to follow the above format."""
+    
+    def evaluate_sft_model(self, test_size: int = 50) -> Dict[str, float]:
+        """Evaluate SFT model performance"""
+        logger.info("Evaluating SFT model...")
+        
+        from reasoning_gym import get_score_answer_fn
+        import re
+        
+        # Create test dataset
+        test_dataset = create_dataset(self.config.environment_name, seed=self.config.eval_seed, size=test_size)
+        
+        # Get evaluation system prompt (configurable)
+        eval_system_prompt = self.get_eval_system_prompt()
         
         correct = 0
         format_correct = 0
@@ -463,7 +474,18 @@ It is critical to follow the above format."""
             from .visualizer import TrainingVisualizer
             
             visualizer = TrainingVisualizer()
-            visualizer.plot_sft_training_curves(self.training_history, save_name)
+            visualizer.plot_sft_training_curves(self.training_history, save_name, show_plots=True)
+            
+        except ImportError:
+            logger.warning("Visualization module not available")
+    
+    def save_training_plots(self, save_name: str) -> None:
+        """Save SFT training plots without displaying them"""
+        try:
+            from .visualizer import TrainingVisualizer
+            
+            visualizer = TrainingVisualizer()
+            visualizer.plot_sft_training_curves(self.training_history, save_name, show_plots=False)
             
         except ImportError:
             logger.warning("Visualization module not available")

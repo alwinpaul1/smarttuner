@@ -397,9 +397,15 @@ Failing to follow the response format will result in a penalty."""
                 self.training_history['accuracies'].append(eval_results['accuracy'] * 100)
                 logger.info(f"Current accuracy: {eval_results['accuracy']:.3f}")
             
-            # Show real-time plots if requested
-            if show_plots and len(self.training_history['losses']) > 1:
-                self._show_live_plots()
+            # Show real-time plots if requested  
+            if (show_plots or save_plots) and len(self.training_history['losses']) > 1:
+                plot_name = f"grpo_{self.config.environment_name}_iter_{iteration + 1}"
+                if show_plots and save_plots:
+                    self._show_live_plots(plot_name)  # Show and save
+                elif show_plots:
+                    self._show_live_plots()  # Show only
+                elif save_plots:
+                    self._save_training_plots(plot_name)  # Save only
             
             # Save model periodically
             if (iteration + 1) % (self.config.save_every // 10) == 0:
@@ -491,18 +497,31 @@ Failing to follow the response format will result in a penalty."""
         logger.info(f"Evaluation results: {results}")
         return results
     
-    def _show_live_plots(self) -> None:
+    def _show_live_plots(self, save_name: str = None) -> None:
         """Show live training plots during training"""
         try:
             from .visualizer import TrainingVisualizer
             
             visualizer = TrainingVisualizer()
-            visualizer.plot_grpo_training_curves(self.training_history, save_name=None)
+            visualizer.plot_grpo_training_curves(self.training_history, save_name=save_name, show_plots=True)
             
         except ImportError:
             logger.warning("Visualization module not available for live plots")
         except Exception as e:
             logger.warning(f"Error showing live plots: {e}")
+    
+    def _save_training_plots(self, save_name: str) -> None:
+        """Save training plots without displaying them"""
+        try:
+            from .visualizer import TrainingVisualizer
+            
+            visualizer = TrainingVisualizer()
+            visualizer.plot_grpo_training_curves(self.training_history, save_name=save_name, show_plots=False)
+            
+        except ImportError:
+            logger.warning("Visualization module not available for saving plots")
+        except Exception as e:
+            logger.warning(f"Error saving training plots: {e}")
     
     def _save_training_history(self, save_path: str) -> None:
         """Save training history to JSON file"""
