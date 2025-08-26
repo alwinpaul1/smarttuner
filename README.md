@@ -51,6 +51,10 @@ uv pip install -r requirements.txt
 
 # Or use pip if you prefer
 pip install -r requirements.txt
+
+# Create .env file with OpenAI API key (required for SFT data generation)
+cp .env.example .env
+# Then edit .env and add your actual API key
 ```
 
 ## Quick Start

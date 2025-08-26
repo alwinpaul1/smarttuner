@@ -7,6 +7,7 @@ import json
 import asyncio
 import openai
 import backoff
+from dotenv import load_dotenv
 from typing import List, Dict, Any
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -130,6 +131,9 @@ class SFTDataGenerator:
     """Generate SFT data using OpenAI API as described in the article"""
     
     def __init__(self, config: SFTConfig):
+        # Load environment variables from .env file
+        load_dotenv()
+        
         self.config = config
         self.client = openai.AsyncClient()
         self.semaphore = asyncio.Semaphore(config.max_concurrent_requests)
