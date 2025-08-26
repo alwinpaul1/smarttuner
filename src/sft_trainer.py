@@ -405,7 +405,9 @@ It is critical to follow the above format."""
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=300,
-                    do_sample=False,
+                    do_sample=True,  # Use sampling to allow format generation
+                    temperature=0.3,  # Low temperature for consistent format
+                    top_p=0.9,  # Controlled sampling
                     eos_token_id=self.tokenizer.eos_token_id,
                     pad_token_id=self.tokenizer.eos_token_id,
                 )

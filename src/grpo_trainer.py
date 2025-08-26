@@ -335,10 +335,13 @@ Failing to follow the response format will result in a penalty."""
             batch_end = min(batch_start + self.config.batch_size, len(self.memory_buffer))
             batch = self.memory_buffer[batch_start:batch_end]
             
-            # Prepare batch
-            full_responses = torch.stack([item["full_response"] for item in batch])
-            response_masks = torch.stack([item["response_mask"] for item in batch])
-            old_log_probs = torch.stack([item["old_log_probs"] for item in batch])
+            # Prepare batch with padding for variable length sequences
+            from torch.nn.utils.rnn import pad_sequence
+            
+            pad_token_id = self.tokenizer.pad_token_id or self.tokenizer.eos_token_id
+            full_responses = pad_sequence([item["full_response"] for item in batch], batch_first=True, padding_value=pad_token_id)
+            response_masks = pad_sequence([item["response_mask"] for item in batch], batch_first=True, padding_value=0)
+            old_log_probs = pad_sequence([item["old_log_probs"] for item in batch], batch_first=True, padding_value=0.0)
             advantages = torch.stack([item["advantages"] for item in batch])
             
             # Move to device
@@ -452,7 +455,10 @@ Failing to follow the response format will result in a penalty."""
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=self.config.max_new_tokens,
-                    do_sample=False,  # Greedy for evaluation
+                    do_sample=True,  # Use sampling to allow format generation
+                    temperature=0.3,  # Low temperature for more consistent format
+                    top_p=0.9,  # Controlled sampling
+                    num_beams=1,  # Single beam for efficiency
                     eos_token_id=self.tokenizer.eos_token_id,
                     pad_token_id=self.tokenizer.eos_token_id,
                 )
