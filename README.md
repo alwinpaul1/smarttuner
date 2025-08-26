@@ -4,7 +4,7 @@ A complete implementation of **Group Relative Policy Optimization (GRPO)** for t
 
 ## Overview
 
-This project implements **RLVR (Reinforcement Learning with Verifiable Rewards)** using the GRPO algorithm to teach small language models (135M-600M parameters) to generate reasoning chains and solve logical tasks.
+This project implements **RLVR (Reinforcement Learning with Verifiable Rewards)** using the GRPO algorithm to teach small language models to generate reasoning chains and solve logical tasks using Qwen2.5-0.5B-Instruct.
 
 ### Key Features
 
@@ -12,7 +12,7 @@ This project implements **RLVR (Reinforcement Learning with Verifiable Rewards)*
 - ✅ **Supervised Fine-tuning (SFT)**: Warmup training with LoRA adapters  
 - ✅ **Verifiable Rewards**: Objective reward calculation for logical tasks
 - ✅ **Multiple Environments**: Syllogism and propositional logic tasks
-- ✅ **Small Model Support**: Optimized for 135M-600M parameter models
+- ✅ **Small Model Support**: Optimized for Qwen2.5-0.5B-Instruct model
 - ✅ **PPO Clipped Loss**: Stable training with importance sampling
 
 ## Architecture
@@ -21,9 +21,9 @@ The training pipeline follows a two-phase approach:
 
 ### Phase 1: Supervised Fine-tuning (SFT)
 - Generate reasoning data using GPT-4o-mini
-- Train small models to generate `<think>...</think>` and `<answer>...</answer>` format
+- Train Qwen2.5-0.5B-Instruct to generate `<think>...</think>` and `<answer>...</answer>` format
 - Use LoRA adapters for parameter-efficient training
-- Achieve ~46% baseline accuracy
+- Achieve strong baseline accuracy
 
 ### Phase 2: GRPO Reinforcement Learning
 - **Experience Collection**: Generate multiple responses per question
@@ -64,22 +64,22 @@ cp .env.example .env
 Run the full SFT → GRPO pipeline:
 
 ```bash
-# Train on syllogism task (easiest) - with uv
+# Train on syllogism task - with uv
 uv run python scripts/full_pipeline.py \
-    --base_model "HuggingfaceTB/SmolLM-135M-Instruct" \
+    --base_model "Qwen/Qwen2.5-0.5B-Instruct" \
     --environment syllogism \
     --sft_datapoints 200 \
     --grpo_iterations 10
 
 # Train on propositional logic (harder) - with uv
 uv run python scripts/full_pipeline.py \
-    --base_model "HuggingfaceTB/SmolLM-360M-Instruct" \
+    --base_model "Qwen/Qwen2.5-0.5B-Instruct" \
     --environment propositional_logic \
     --sft_datapoints 200 \
     --grpo_iterations 10
 
 # Or use regular python if you prefer
-python scripts/full_pipeline.py --environment syllogism
+python scripts/full_pipeline.py --base_model "Qwen/Qwen2.5-0.5B-Instruct" --environment syllogism
 ```
 
 ### Step-by-Step Training
@@ -89,14 +89,14 @@ python scripts/full_pipeline.py --environment syllogism
 ```bash
 # With uv (recommended)
 uv run python scripts/train_sft.py \
-    --model_name "HuggingfaceTB/SmolLM-135M-Instruct" \
+    --model_name "Qwen/Qwen2.5-0.5B-Instruct" \
     --environment syllogism \
     --num_datapoints 200 \
     --num_epochs 3 \
     --output_dir models/sft
 
 # Or with regular python
-python scripts/train_sft.py --environment syllogism
+python scripts/train_sft.py --model_name "Qwen/Qwen2.5-0.5B-Instruct" --environment syllogism
 ```
 
 #### 2. GRPO Training
@@ -137,7 +137,7 @@ uv run python scripts/full_pipeline.py \
 
 ```bash
 # Visualize specific result file
-uv run python scripts/visualize_results.py --file results/grpo_syllogism_SmolLM-135M-Instruct.json
+uv run python scripts/visualize_results.py --file results/grpo_syllogism_Qwen2.5-0.5B-Instruct.json
 
 # Interactive mode - select from available results
 uv run python scripts/visualize_results.py
@@ -167,13 +167,11 @@ python scripts/train_grpo.py --dataset_seed 123 --eval_seed 456
 
 ## Configuration
 
-### Models Supported
+### Model Supported
 
 | Model | Parameters | Expected Performance |
 |-------|------------|---------------------|
-| SmolLM-135M-Instruct | 135M | 60% on syllogism |
-| SmolLM-360M-Instruct | 360M | ~70% on syllogism |
-| Qwen2.5-0.5B-Instruct | 600M | 81% on syllogism |
+| Qwen2.5-0.5B-Instruct | 500M | High performance on reasoning tasks |
 
 ### Hyperparameters
 
@@ -213,15 +211,14 @@ target_modules: ["q_proj", "v_proj", "k_proj", "o_proj",
 - **Description**: Symbolic reasoning with generated conclusions
 - **Format**: Generate correct logical conclusion
 - **Difficulty**: Harder reasoning task
-- **Expected Improvement**: Varies by model size
+- **Expected Improvement**: Significant improvement with GRPO
 
-## Results (from article)
+## Results
 
-| Model | Task | Baseline | After GRPO | Improvement |
-|-------|------|----------|------------|-------------|
-| SmolLM-135M | Syllogism | 46% (SFT) | 60% | +14% |
-| SmolLM-360M | Syllogism | - | ~70% | ~+20% |
-| Qwen2.5-0.5B | Syllogism | - | 81% | ~+20% |
+| Model | Task | Expected Improvement |
+|-------|------|---------------------|
+| Qwen2.5-0.5B-Instruct | Syllogism | Significant accuracy gains with GRPO |
+| Qwen2.5-0.5B-Instruct | Propositional Logic | Strong reasoning performance |
 
 ## Visualization & Monitoring
 
@@ -242,9 +239,9 @@ SmartTuner provides comprehensive visualization for training analysis:
 - 📊 **Learning Rate Schedule**: Learning rate changes during training
 
 **Comparison Analysis:**
-- 📊 **Before/After Comparison**: Baseline vs final performance
-- 🏆 **Model Size Comparison**: Performance across different model sizes
+- 📊 **Before/After Comparison**: Baseline vs final performance  
 - 📈 **Improvement Metrics**: Percentage point improvements
+- 🎯 **Task Performance**: Analysis across different reasoning tasks
 
 ### Real-time Monitoring
 
@@ -307,7 +304,7 @@ Note: data/, models/, and results/ folders are created automatically by training
 
 ## Key Insights
 
-1. **Small models need SFT warmup** - Cannot rely on pure RL from scratch
+1. **SFT warmup is essential** - Models need supervised fine-tuning before RL
 2. **Diverse responses are crucial** - High temperature/top_p for good advantages
 3. **Group relative advantages work better** - No need for separate value network  
 4. **Low learning rates essential** - 1e-6 to 1e-7 for stability

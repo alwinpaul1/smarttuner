@@ -4,6 +4,7 @@ before GRPO training, as described in the article.
 """
 
 import json
+import os
 import asyncio
 import openai
 import backoff
@@ -193,6 +194,22 @@ Answer: {item['answer']}
     
     async def generate_dataset(self) -> List[Dict]:
         """Generate complete SFT dataset"""
+        # Check if data already exists
+        os.makedirs("data", exist_ok=True)
+        filename = f"data/sft_{self.config.environment_name}_{self.config.openai_model}.json"
+        
+        if os.path.exists(filename):
+            try:
+                with open(filename, "r") as f:
+                    existing_data = json.load(f)
+                if len(existing_data) == self.config.num_datapoints:
+                    logger.info(f"Found existing SFT data with {len(existing_data)} examples at {filename}")
+                    return existing_data
+                else:
+                    logger.info(f"Existing data has {len(existing_data)} examples, need {self.config.num_datapoints}. Regenerating...")
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.info(f"Existing data file corrupted ({e}), regenerating...")
+        
         logger.info(f"Generating {self.config.num_datapoints} examples for {self.config.environment_name}")
         
         # Create reasoning gym dataset
@@ -208,8 +225,6 @@ Answer: {item['answer']}
         ])
         
         # Save raw data
-        os.makedirs("data", exist_ok=True)
-        filename = f"data/sft_{self.config.environment_name}_{self.config.openai_model}.json"
         with open(filename, "w") as f:
             json.dump(responses, f, indent=4)
         
@@ -307,7 +322,7 @@ class SFTTrainer:
             args=training_args,
             train_dataset=train_dataset,
             data_collator=data_collator,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,
             callbacks=[metrics_callback]
         )
         
@@ -366,8 +381,8 @@ It is critical to follow the above format."""
         with torch.no_grad():
             for item in test_dataset:
                 question = item["question"]
-                validation_object = item["metadata"]["source_dataset"]
-                score_fn = get_score_answer_fn(validation_object)
+                dataset_name = item["metadata"]["source_dataset"]
+                score_fn = get_score_answer_fn(dataset_name)
                 
                 # Create messages
                 messages = [
@@ -376,32 +391,32 @@ It is critical to follow the above format."""
                 ]
                 
                 # Generate response
-                inputs = self.tokenizer.apply_chat_template(
+                input_ids = self.tokenizer.apply_chat_template(
                     messages,
                     tokenize=True,
                     return_tensors="pt",
                     add_generation_prompt=True
                 )
                 
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+                input_ids = input_ids.to(self.model.device)
+                attention_mask = torch.ones_like(input_ids).to(self.model.device)
                 
                 generated = self.model.generate(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
                     max_new_tokens=300,
                     do_sample=False,
-                    temperature=0.1,
                     eos_token_id=self.tokenizer.eos_token_id,
                     pad_token_id=self.tokenizer.eos_token_id,
                 )
                 
                 # Decode response
-                input_length = inputs["input_ids"].shape[1]
+                input_length = input_ids.shape[1]
                 response = self.tokenizer.decode(generated[0][input_length:], skip_special_tokens=True)
                 
                 # Evaluate
                 extracted_answer = extract_answer(response)
-                is_correct = score_fn(extracted_answer, validation_object)
+                is_correct = score_fn(extracted_answer, item)
                 has_format = has_proper_format(response)
                 
                 if is_correct:

@@ -207,13 +207,16 @@ Failing to follow the response format will result in a penalty."""
         all_correctness_rewards = []
         all_format_rewards = []
         
+        # Convert dataset to list for batching
+        dataset_items = list(dataset)
+        
         with torch.no_grad():
-            for batch_idx in tqdm(range(0, len(dataset), self.config.exploration_batchsize)):
-                batch = dataset[batch_idx:batch_idx + self.config.exploration_batchsize]
+            for batch_idx in tqdm(range(0, len(dataset_items), self.config.exploration_batchsize)):
+                batch = dataset_items[batch_idx:batch_idx + self.config.exploration_batchsize]
                 
                 questions = [d["question"] for d in batch]
-                validation_objects = [d["metadata"]["source_dataset"] for d in batch]
-                score_fns = [get_score_answer_fn(vo) for vo in validation_objects]
+                dataset_names = [d["metadata"]["source_dataset"] for d in batch]
+                score_fns = [get_score_answer_fn(name) for name in dataset_names]
                 
                 # Process each question
                 for q_idx, (question, score_fn) in enumerate(zip(questions, score_fns)):
@@ -224,20 +227,21 @@ Failing to follow the response format will result in a penalty."""
                     ]
                     
                     # Tokenize
-                    inputs = self.tokenizer.apply_chat_template(
+                    input_ids = self.tokenizer.apply_chat_template(
                         messages,
                         tokenize=True,
                         return_tensors="pt",
                         add_generation_prompt=True
                     )
                     
-                    inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-                    input_length = inputs["input_ids"].shape[1]
+                    input_ids = input_ids.to(self.model.device)
+                    attention_mask = torch.ones_like(input_ids).to(self.model.device)
+                    input_length = input_ids.shape[1]
                     
                     # Generate multiple responses
                     generated_responses = self.model.generate(
-                        input_ids=inputs["input_ids"],
-                        attention_mask=inputs["attention_mask"],
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
                         max_new_tokens=self.config.max_new_tokens,
                         do_sample=True,
                         top_p=self.config.top_p,
@@ -265,7 +269,7 @@ Failing to follow the response format will result in a penalty."""
                         
                         # Calculate rewards
                         extracted_answer = self.extract_answer(response_text)
-                        correctness_reward = score_fn(extracted_answer, validation_objects[q_idx])
+                        correctness_reward = score_fn(extracted_answer, batch[q_idx])
                         format_reward = self.calculate_format_reward(response_text)
                         
                         total_reward = (correctness_reward * self.config.correctness_reward_weight + 
@@ -424,8 +428,8 @@ Failing to follow the response format will result in a penalty."""
         with torch.no_grad():
             for item in tqdm(dataset):
                 question = item["question"]
-                validation_object = item["metadata"]["source_dataset"]
-                score_fn = get_score_answer_fn(validation_object)
+                dataset_name = item["metadata"]["source_dataset"]
+                score_fn = get_score_answer_fn(dataset_name)
                 
                 # Create messages
                 messages = [
@@ -434,18 +438,19 @@ Failing to follow the response format will result in a penalty."""
                 ]
                 
                 # Generate response
-                inputs = self.tokenizer.apply_chat_template(
+                input_ids = self.tokenizer.apply_chat_template(
                     messages,
                     tokenize=True,
                     return_tensors="pt",
                     add_generation_prompt=True
                 )
                 
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+                input_ids = input_ids.to(self.model.device)
+                attention_mask = torch.ones_like(input_ids).to(self.model.device)
                 
                 generated = self.model.generate(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
                     max_new_tokens=self.config.max_new_tokens,
                     do_sample=False,  # Greedy for evaluation
                     eos_token_id=self.tokenizer.eos_token_id,
@@ -453,12 +458,12 @@ Failing to follow the response format will result in a penalty."""
                 )
                 
                 # Decode response
-                input_length = inputs["input_ids"].shape[1]
+                input_length = input_ids.shape[1]
                 response = self.tokenizer.decode(generated[0][input_length:], skip_special_tokens=True)
                 
                 # Extract answer and check
                 extracted_answer = self.extract_answer(response)
-                is_correct = score_fn(extracted_answer, validation_object)
+                is_correct = score_fn(extracted_answer, item)
                 has_format = self.calculate_format_reward(response) > 0.5
                 
                 if is_correct:
