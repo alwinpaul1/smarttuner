@@ -14,6 +14,9 @@ This project implements **RLVR (Reinforcement Learning with Verifiable Rewards)*
 - ✅ **Multiple Environments**: Syllogism and propositional logic tasks
 - ✅ **Small Model Support**: Optimized for Qwen2.5-0.5B-Instruct model
 - ✅ **PPO Clipped Loss**: Stable training with importance sampling
+- ✅ **Configurable System Prompts**: Easy experimentation via YAML configuration
+- ✅ **Robust Error Handling**: Comprehensive validation and informative error messages
+- ✅ **Advanced Visualization**: Dedicated save/show functions with memory management
 
 ## Architecture
 
@@ -69,6 +72,13 @@ uv run python scripts/full_pipeline.py \
     --base_model "Qwen/Qwen2.5-0.5B-Instruct" \
     --environment syllogism \
     --sft_datapoints 200 \
+    --grpo_iterations 10
+
+# Skip SFT and use existing model for GRPO
+uv run python scripts/full_pipeline.py \
+    --skip_sft \
+    --sft_model_path models/sft/syllogism \
+    --environment syllogism \
     --grpo_iterations 10
 
 # Train on propositional logic (harder) - with uv
@@ -167,6 +177,24 @@ python scripts/train_grpo.py --dataset_seed 123 --eval_seed 456
 
 ## Configuration
 
+### System Prompt Customization
+
+System prompts can be customized via the `configs/small_models.yaml` file:
+
+```yaml
+environments:
+  syllogism:
+    system_prompt: |
+      Your custom system prompt here...
+      The assistant first thinks about the reasoning process...
+  
+  propositional_logic:
+    system_prompt: |
+      Your custom system prompt for propositional logic...
+```
+
+This allows easy experimentation with different prompting strategies without modifying Python code.
+
 ### Model Supported
 
 | Model | Parameters | Expected Performance |
@@ -250,7 +278,54 @@ Enable live plotting during training to monitor progress:
 uv run python scripts/train_grpo.py --show_plots --environment syllogism
 ```
 
+### Advanced Visualization Features
+
+- **Memory Efficient**: Dedicated save functions that automatically close plots to prevent memory leaks
+- **Flexible Output**: Separate show and save functionality for different use cases
+- **High Quality**: All plots saved as 300 DPI PNG files perfect for publications
+- **Automatic Organization**: Results organized by timestamp and model name
+
+```bash
+# Save plots without displaying (great for remote servers)
+uv run python scripts/train_grpo.py --save_plots --environment syllogism
+
+# Display plots interactively during training
+uv run python scripts/train_grpo.py --show_plots --environment syllogism
+
+# Both save and display
+uv run python scripts/train_grpo.py --save_plots --show_plots --environment syllogism
+```
+
 All plots are saved as high-resolution PNG files in the `plots/` directory, perfect for research papers and presentations.
+
+## Error Handling & Troubleshooting
+
+SmartTuner includes comprehensive error handling for common issues:
+
+### Model Loading Issues
+- **Automatic validation**: Checks if model names are correct before loading
+- **Informative errors**: Clear messages for network issues or incorrect model names
+- **Fallback handling**: Graceful degradation when models are unavailable
+
+### API Key Validation
+- **Pre-flight checks**: Validates OpenAI API key before starting data generation
+- **Clear instructions**: Step-by-step guidance for setting up API keys
+- **Multiple setup methods**: Support for both .env files and environment variables
+
+### Common Error Solutions
+
+**"Failed to load model"**: Check your internet connection and verify the model name is correct.
+
+**"OpenAI API key not found"**: 
+```bash
+# Method 1: Create .env file
+echo "OPENAI_API_KEY=your_key_here" > .env
+
+# Method 2: Export environment variable  
+export OPENAI_API_KEY=your_key_here
+```
+
+**"Model not found at path"**: Use `--sft_model_path` to specify the exact location of your SFT model.
 
 ## Implementation Details
 
