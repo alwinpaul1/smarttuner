@@ -122,14 +122,14 @@ def main():
         environment_name=args.environment,
         # Optimized parameters for Qwen2.5-0.5B and format learning
         max_new_tokens=250,  # Enough for reasoning + answer
-        exploration_batchsize=6,  # Balanced for diverse responses
+        exploration_batchsize=4,  # Reduced for memory efficiency
         G=5,  # Good group size for relative advantages
         temperature=0.8,  # Higher temperature for diverse reasoning
-        batch_size=12,  # Increased for better gradient estimation
-        gradient_accumulation_steps=6,  # Balanced accumulation
+        batch_size=4,  # Reduced for MPS memory constraints
+        gradient_accumulation_steps=12,  # Increased accumulation to maintain effective batch size
         learning_rate=2e-6,  # Slightly higher for faster format learning
         top_p=0.9,  # More focused sampling
-        buffer_size=400,  # More experience replay
+        buffer_size=200,  # Reduced for memory efficiency
         # Multi-stage reward system enabled
         use_graduated_rewards=True,
         initial_format_weight=0.6,  # High format emphasis initially

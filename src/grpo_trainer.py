@@ -289,38 +289,71 @@ Failing to follow the response format will result in a penalty."""
     def calculate_log_probs(self, model, input_ids: torch.Tensor, response_mask: torch.Tensor) -> torch.Tensor:
         """Calculate log probabilities of generated tokens"""
         with torch.no_grad() if hasattr(self, '_collecting_experience') and self._collecting_experience else torch.enable_grad():
+            # Debug logging for input shapes
+            logger.debug(f"calculate_log_probs input shapes: input_ids: {input_ids.shape}, response_mask: {response_mask.shape}")
+            
             logits = model(input_ids=input_ids).logits
+            logger.debug(f"Model logits shape: {logits.shape}")
             
             # Shift logits and labels for next token prediction
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = input_ids[..., 1:].contiguous()
             shift_mask = response_mask[..., 1:].contiguous()
             
+            logger.debug(f"Shifted shapes: logits: {shift_logits.shape}, labels: {shift_labels.shape}, mask: {shift_mask.shape}")
+            
             # Calculate log probabilities
             log_probs = F.log_softmax(shift_logits, dim=-1)
             selected_log_probs = log_probs.gather(dim=-1, index=shift_labels.unsqueeze(-1)).squeeze(-1)
             
+            logger.debug(f"Selected log_probs shape before masking: {selected_log_probs.shape}")
+            
             # Apply mask to only consider AI-generated tokens
             selected_log_probs = selected_log_probs * shift_mask
+            
+            logger.debug(f"Final log_probs shape: {selected_log_probs.shape}, non-zero elements: {torch.count_nonzero(selected_log_probs).item()}")
             
             return selected_log_probs
     
     def calculate_ppo_loss(self, new_log_probs: torch.Tensor, old_log_probs: torch.Tensor, 
                           advantages: torch.Tensor, response_mask: torch.Tensor) -> torch.Tensor:
-        """Calculate PPO clipped surrogate loss as described in article"""
+        """Calculate PPO clipped surrogate loss with robust tensor alignment"""
+        
+        # Debug logging for tensor shapes
+        logger.debug(f"PPO Loss tensor shapes - new_log_probs: {new_log_probs.shape}, "
+                    f"old_log_probs: {old_log_probs.shape}, advantages: {advantages.shape}, "
+                    f"response_mask: {response_mask.shape}")
+        
+        # Ensure tensor alignment by taking minimum sequence length
+        min_seq_len = min(new_log_probs.shape[1], old_log_probs.shape[1])
+        
+        # Truncate tensors to matching length
+        new_log_probs = new_log_probs[:, :min_seq_len]
+        old_log_probs = old_log_probs[:, :min_seq_len] 
+        response_mask = response_mask[:, :min_seq_len]
+        
+        # Validate shapes after alignment
+        if new_log_probs.shape != old_log_probs.shape:
+            logger.error(f"Shape mismatch after alignment: new_log_probs {new_log_probs.shape} vs old_log_probs {old_log_probs.shape}")
+            raise ValueError(f"Cannot align tensor shapes: {new_log_probs.shape} vs {old_log_probs.shape}")
+        
+        if new_log_probs.shape != response_mask.shape:
+            logger.error(f"Log probs vs mask shape mismatch: {new_log_probs.shape} vs {response_mask.shape}")
+            raise ValueError(f"Log probs and mask shape mismatch: {new_log_probs.shape} vs {response_mask.shape}")
+        
         # Calculate ratio
         ratio = torch.exp(new_log_probs - old_log_probs)
         
         # Expand advantages to match sequence dimension for broadcasting
-        # advantages shape: [batch_size] -> [batch_size, 1] for broadcasting
+        # advantages shape: [batch_size] -> [batch_size, 1] for broadcasting across sequence
         if advantages.dim() == 1:
             advantages = advantages.unsqueeze(-1)
         
-        # Validate tensor dimensions
+        # Validate batch dimensions
         if ratio.shape[0] != advantages.shape[0]:
             raise ValueError(f"Batch size mismatch: ratio {ratio.shape} vs advantages {advantages.shape}")
         
-        # Calculate surrogate losses
+        # Calculate surrogate losses with proper broadcasting
         surr1 = ratio * advantages
         surr2 = torch.clamp(ratio, 1 - self.config.ppo_clip_ratio, 1 + self.config.ppo_clip_ratio) * advantages
         
@@ -328,7 +361,12 @@ Failing to follow the response format will result in a penalty."""
         policy_loss = -torch.min(surr1, surr2) * response_mask
         
         # Average over valid tokens
-        return policy_loss.sum() / response_mask.sum()
+        total_valid_tokens = response_mask.sum()
+        if total_valid_tokens == 0:
+            logger.warning("No valid tokens in batch, returning zero loss")
+            return torch.tensor(0.0, device=policy_loss.device, requires_grad=True)
+        
+        return policy_loss.sum() / total_valid_tokens
     
     def experience_collection(self, dataset_size: int = 100) -> None:
         """Experience collection phase as described in article"""
@@ -463,6 +501,31 @@ Failing to follow the response format will result in a penalty."""
         logger.info(f"Mean reward: {np.mean(all_rewards):.3f} ± {np.std(all_rewards):.3f}")
         logger.info(f"Format accuracy: {current_format_accuracy:.1%} ({int(current_format_accuracy * len(format_accuracies))}/{len(format_accuracies)} responses with proper tags)")
         logger.info(f"Mean format reward: {np.mean(all_format_rewards):.3f}")
+        
+        # Memory and buffer debugging
+        logger.debug(f"Memory buffer usage: {len(self.memory_buffer)}/{self.config.buffer_size} (capacity: {len(self.memory_buffer)/self.config.buffer_size:.1%})")
+        
+        # Check tensor shapes in buffer for consistency
+        if self.memory_buffer:
+            sample_item = self.memory_buffer[0]
+            logger.debug(f"Buffer sample tensor shapes: "
+                        f"full_response: {sample_item['full_response'].shape}, "
+                        f"response_mask: {sample_item['response_mask'].shape}, "
+                        f"old_log_probs: {sample_item['old_log_probs'].shape}")
+            
+        # Memory cleanup if buffer is approaching capacity
+        if len(self.memory_buffer) > 0.9 * self.config.buffer_size:
+            logger.warning(f"Memory buffer approaching capacity ({len(self.memory_buffer)}/{self.config.buffer_size})")
+            
+        # Clear GPU cache to prevent memory overflow
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            # Clear MPS cache 
+            try:
+                torch.mps.empty_cache()
+            except:
+                pass
     
     def training_phase(self) -> float:
         """Training phase using collected experiences"""
@@ -482,26 +545,58 @@ Failing to follow the response format will result in a penalty."""
             batch_end = min(batch_start + self.config.batch_size, len(self.memory_buffer))
             batch = self.memory_buffer[batch_start:batch_end]
             
-            # Prepare batch with padding for variable length sequences
-            from torch.nn.utils.rnn import pad_sequence
+            # Debug: Log batch size
+            logger.debug(f"Processing batch {num_batches + 1}: items {batch_start}-{batch_end-1} (size: {len(batch)})")
             
-            pad_token_id = self.tokenizer.pad_token_id or self.tokenizer.eos_token_id
-            full_responses = pad_sequence([item["full_response"] for item in batch], batch_first=True, padding_value=pad_token_id)
-            response_masks = pad_sequence([item["response_mask"] for item in batch], batch_first=True, padding_value=0)
-            old_log_probs = pad_sequence([item["old_log_probs"] for item in batch], batch_first=True, padding_value=0.0)
-            advantages = torch.stack([item["advantages"] for item in batch])
-            
-            # Move to device
-            full_responses = full_responses.to(self.model.device)
-            response_masks = response_masks.to(self.model.device)
-            old_log_probs = old_log_probs.to(self.model.device)
-            advantages = advantages.to(self.model.device)
-            
-            # Calculate new log probabilities
-            new_log_probs = self.calculate_log_probs(self.model, full_responses, response_masks)
-            
-            # Calculate PPO loss
-            loss = self.calculate_ppo_loss(new_log_probs, old_log_probs, advantages, response_masks)
+            try:
+                # Prepare batch with padding for variable length sequences
+                from torch.nn.utils.rnn import pad_sequence
+                
+                pad_token_id = self.tokenizer.pad_token_id or self.tokenizer.eos_token_id
+                
+                # Extract tensors from batch
+                full_responses_list = [item["full_response"] for item in batch]
+                response_masks_list = [item["response_mask"] for item in batch] 
+                old_log_probs_list = [item["old_log_probs"] for item in batch]
+                advantages_list = [item["advantages"] for item in batch]
+                
+                # Debug: Log original tensor shapes
+                logger.debug(f"Original shapes in batch: "
+                           f"full_responses: {[t.shape for t in full_responses_list[:3]]}, "
+                           f"response_masks: {[t.shape for t in response_masks_list[:3]]}, "
+                           f"old_log_probs: {[t.shape for t in old_log_probs_list[:3]]}")
+                
+                # Pad sequences to same length
+                full_responses = pad_sequence(full_responses_list, batch_first=True, padding_value=pad_token_id)
+                response_masks = pad_sequence(response_masks_list, batch_first=True, padding_value=0)
+                old_log_probs = pad_sequence(old_log_probs_list, batch_first=True, padding_value=0.0)
+                advantages = torch.stack(advantages_list)
+                
+                # Debug: Log padded tensor shapes  
+                logger.debug(f"Padded shapes: full_responses: {full_responses.shape}, "
+                           f"response_masks: {response_masks.shape}, old_log_probs: {old_log_probs.shape}, "
+                           f"advantages: {advantages.shape}")
+                
+                # Move to device
+                full_responses = full_responses.to(self.model.device)
+                response_masks = response_masks.to(self.model.device)
+                old_log_probs = old_log_probs.to(self.model.device)
+                advantages = advantages.to(self.model.device)
+                
+                # Calculate new log probabilities
+                new_log_probs = self.calculate_log_probs(self.model, full_responses, response_masks)
+                
+                # Debug: Log calculated log prob shapes
+                logger.debug(f"Calculated new_log_probs shape: {new_log_probs.shape}")
+                
+                # Calculate PPO loss (now handles tensor alignment internally)
+                loss = self.calculate_ppo_loss(new_log_probs, old_log_probs, advantages, response_masks)
+                
+            except Exception as e:
+                logger.error(f"Error in batch {num_batches + 1}: {str(e)}")
+                logger.error(f"Batch details: {len(batch)} items")
+                # Skip this batch and continue
+                continue
             
             # Backward pass
             self.accelerator.backward(loss)
@@ -519,77 +614,143 @@ Failing to follow the response format will result in a penalty."""
         # Store training loss
         self.training_history['losses'].append(avg_loss)
         
-        # Clear buffer after training
+        # Clear buffer after training with memory optimization
+        logger.debug(f"Clearing memory buffer ({len(self.memory_buffer)} items)")
         self.memory_buffer.clear()
+        
+        # Force garbage collection after training
+        import gc
+        gc.collect()
+        
+        # Clear GPU cache after training
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            try:
+                torch.mps.empty_cache()
+            except:
+                pass
         
         return avg_loss
     
     def train(self, num_iterations: int = 10, dataset_size_per_iteration: int = 100, 
               show_plots: bool = False, save_plots: bool = False):
-        """Main GRPO training loop with optional visualization"""
+        """Main GRPO training loop with comprehensive error handling and optimization"""
         logger.info("Starting GRPO training...")
         
-        for iteration in range(num_iterations):
-            logger.info(f"=== Iteration {iteration + 1}/{num_iterations} ===")
-            
-            # Update current iteration for dynamic reward weighting
-            self.current_iteration = iteration + 1
-            
-            # Get and log current reward weights
-            correctness_weight, format_weight = self.get_dynamic_reward_weights(
-                self.current_iteration, total_iterations=num_iterations
-            )
-            logger.info(f"Dynamic weights - Correctness: {correctness_weight:.3f}, Format: {format_weight:.3f}")
-            
-            # Experience collection phase
-            self.experience_collection(dataset_size_per_iteration)
-            
-            # Training phase
-            avg_loss = self.training_phase()
-            
-            # Track dynamic weights in training history
-            self.training_history['correctness_weights'].append(correctness_weight)
-            self.training_history['format_weights'].append(format_weight)
-            
-            # Evaluate accuracy periodically
-            if (iteration + 1) % max(1, num_iterations // 5) == 0:  # Evaluate 5 times during training
-                eval_results = self.evaluate(test_size=50)  # Quick evaluation
-                self.training_history['accuracies'].append(eval_results['accuracy'] * 100)
-                logger.info(f"Current accuracy: {eval_results['accuracy']:.1%}")
-                logger.info(f"Current format accuracy: {eval_results['format_accuracy']:.1%}")
-                
-                # Log progress summary
-                if len(self.training_history['accuracies']) > 1:
-                    prev_accuracy = self.training_history['accuracies'][-2] / 100
-                    accuracy_change = eval_results['accuracy'] - prev_accuracy
-                    logger.info(f"Accuracy change: {accuracy_change:+.1%}")
-            
-            # Show real-time plots if requested  
-            if (show_plots or save_plots) and len(self.training_history['losses']) > 1:
-                plot_name = f"grpo_{self.config.environment_name}_iter_{iteration + 1}"
-                if show_plots and save_plots:
-                    self._show_live_plots(plot_name)  # Show and save
-                elif show_plots:
-                    self._show_live_plots()  # Show only
-                elif save_plots:
-                    self._save_training_plots(plot_name)  # Save only
-            
-            # Save model periodically
-            if (iteration + 1) % (self.config.save_every // 10) == 0:
-                save_path = os.path.join(self.output_dir, f"checkpoint_iter_{iteration + 1}")
-                os.makedirs(save_path, exist_ok=True)
-                self.model.save_pretrained(save_path)
-                logger.info(f"Saved checkpoint at iteration {iteration + 1}")
-                
-                # Save training history
-                self._save_training_history(save_path)
+        # Initialize error tracking
+        failed_iterations = 0
+        max_failures = 3  # Allow up to 3 failed iterations before stopping
         
-        # Save final model
-        final_path = os.path.join(self.output_dir, "final_model")
-        os.makedirs(final_path, exist_ok=True)
-        self.model.save_pretrained(final_path)
-        self.tokenizer.save_pretrained(final_path)
-        logger.info(f"Training completed. Final model saved to {final_path}")
+        try:
+            for iteration in range(num_iterations):
+                logger.info(f"=== Iteration {iteration + 1}/{num_iterations} ===")
+                
+                try:
+                    # Update current iteration for dynamic reward weighting
+                    self.current_iteration = iteration + 1
+                    
+                    # Get and log current reward weights
+                    correctness_weight, format_weight = self.get_dynamic_reward_weights(
+                        self.current_iteration, total_iterations=num_iterations
+                    )
+                    logger.info(f"Dynamic weights - Correctness: {correctness_weight:.3f}, Format: {format_weight:.3f}")
+                    
+                    # Experience collection phase with error handling
+                    try:
+                        self.experience_collection(dataset_size_per_iteration)
+                    except Exception as e:
+                        logger.error(f"Error in experience collection (iteration {iteration + 1}): {str(e)}")
+                        failed_iterations += 1
+                        if failed_iterations >= max_failures:
+                            logger.error(f"Too many failures ({failed_iterations}), stopping training")
+                            break
+                        continue
+                    
+                    # Training phase with error handling
+                    try:
+                        avg_loss = self.training_phase()
+                    except Exception as e:
+                        logger.error(f"Error in training phase (iteration {iteration + 1}): {str(e)}")
+                        failed_iterations += 1
+                        if failed_iterations >= max_failures:
+                            logger.error(f"Too many failures ({failed_iterations}), stopping training")
+                            break
+                        continue
+                    
+                    # Track dynamic weights in training history
+                    self.training_history['correctness_weights'].append(correctness_weight)
+                    self.training_history['format_weights'].append(format_weight)
+                    
+                    # Evaluate accuracy periodically with error handling
+                    if (iteration + 1) % max(1, num_iterations // 5) == 0:  # Evaluate 5 times during training
+                        try:
+                            eval_results = self.evaluate(test_size=50)  # Quick evaluation
+                            self.training_history['accuracies'].append(eval_results['accuracy'] * 100)
+                            logger.info(f"Current accuracy: {eval_results['accuracy']:.1%}")
+                            logger.info(f"Current format accuracy: {eval_results['format_accuracy']:.1%}")
+                            
+                            # Log progress summary
+                            if len(self.training_history['accuracies']) > 1:
+                                prev_accuracy = self.training_history['accuracies'][-2] / 100
+                                accuracy_change = eval_results['accuracy'] - prev_accuracy
+                                logger.info(f"Accuracy change: {accuracy_change:+.1%}")
+                        except Exception as e:
+                            logger.warning(f"Evaluation failed (iteration {iteration + 1}): {str(e)}")
+                    
+                    # Show real-time plots if requested with error handling
+                    if (show_plots or save_plots) and len(self.training_history['losses']) > 1:
+                        try:
+                            plot_name = f"grpo_{self.config.environment_name}_iter_{iteration + 1}"
+                            if show_plots and save_plots:
+                                self._show_live_plots(plot_name)  # Show and save
+                            elif show_plots:
+                                self._show_live_plots()  # Show only
+                            elif save_plots:
+                                self._save_training_plots(plot_name)  # Save only
+                        except Exception as e:
+                            logger.warning(f"Plotting failed (iteration {iteration + 1}): {str(e)}")
+                    
+                    # Save model periodically with error handling
+                    if (iteration + 1) % (self.config.save_every // 10) == 0:
+                        try:
+                            save_path = os.path.join(self.output_dir, f"checkpoint_iter_{iteration + 1}")
+                            os.makedirs(save_path, exist_ok=True)
+                            self.model.save_pretrained(save_path)
+                            logger.info(f"Saved checkpoint at iteration {iteration + 1}")
+                            
+                            # Save training history
+                            self._save_training_history(save_path)
+                        except Exception as e:
+                            logger.warning(f"Checkpoint save failed (iteration {iteration + 1}): {str(e)}")
+                            
+                except Exception as e:
+                    logger.error(f"Critical error in iteration {iteration + 1}: {str(e)}")
+                    failed_iterations += 1
+                    if failed_iterations >= max_failures:
+                        logger.error(f"Too many failures ({failed_iterations}), stopping training")
+                        break
+                    
+        except Exception as e:
+            logger.error(f"Fatal error in training loop: {str(e)}")
+            raise
+        
+        finally:
+            # Ensure final model is always saved, even if training fails
+            try:
+                final_path = os.path.join(self.output_dir, "final_model")
+                os.makedirs(final_path, exist_ok=True)
+                self.model.save_pretrained(final_path)
+                self.tokenizer.save_pretrained(final_path)
+                logger.info(f"Training completed. Final model saved to {final_path}")
+            except Exception as e:
+                logger.error(f"Failed to save final model: {str(e)}")
+                
+        # Report training summary
+        if failed_iterations > 0:
+            logger.warning(f"Training completed with {failed_iterations} failed iterations")
+        else:
+            logger.info("Training completed successfully with no failures")
     
     def evaluate(self, test_size: int = 100) -> Dict[str, float]:
         """Evaluate model performance"""
